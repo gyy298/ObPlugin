@@ -1,11 +1,11 @@
 {
-	"id": "PARA&GTD",
-	"name": "PARA&GTD",
-	"version": "1.0.0",
-	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"id": "para-workflower",
+	"name": "PARA Workflower",
+	"version": "0.1.5",
+	"minAppVersion": "1.5.8",
+	"description": "Helpful commands for starting and working in your vault with the PARA method.",
+	"author": "KevTheDevX",
+	"authorUrl": "https://github.com/trucke",
 	"isDesktopOnly": false
 }
+

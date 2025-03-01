@@ -1,90 +1,145 @@
+import { App, Notice, Plugin, TFile, TFolder } from "obsidian";
+import { isPluginEnabled } from "obsidian-dataview";
+
+import { CreateProjectModal, createProject } from "src/para-project";
+import { DEFAULT_SETTINGS, SettingTab } from "src/settings";
+import { initializeVault } from "src/init";
 import {
-	App,
-	Editor,
-	MarkdownView,
-	Modal,
-	Notice,
-	Plugin,
-	PluginSettingTab,
-	Setting,
-} from "obsidian";
+	CreateProjectProps,
+	CreateAreaProps,
+	CreateResourceProps,
+	PluginSettings,
+	ArchiveItem,
+	ParaType,
+} from "src/types";
+import { CreateAreaModal, createArea } from "src/para-area";
+import { CreateResourceModal, createResource } from "src/para-resource";
+import { archive, completeProject } from "src/command-utils/archive";
+import { restore } from "src/command-utils/restore";
+import { RestoreParaItemModal } from "src/modals/RestoreParaItemModal";
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
-}
-
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: "default",
-};
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class ParaWorkflower extends Plugin {
+	settings: PluginSettings;
 
 	async onload() {
+		if (!isPluginEnabled(this.app)) {
+			new Notice("You need to install and enable dataview first!", 5000);
+			return;
+		}
+
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon("dice", "Sample Plugin", (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice("This is a notice!");
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass("my-plugin-ribbon-class");
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText("Status Bar Text");
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: "open-sample-modal-simple",
-			name: "Open sample modal (simple)",
+			id: "init-vault",
+			name: "Initialize vault",
 			callback: () => {
-				new SampleModal(this.app).open();
+				initializeVault(this.app.vault, this.settings).then(() => {
+					new Notice("Vault initialized", 5000);
+				});
 			},
 		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: "sample-editor-command",
-			name: "Sample editor command",
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection("Sample Editor Command");
-			},
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: "open-sample-modal-complex",
-			name: "Open sample modal (complex)",
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+		this.addCommand({
+			id: "create-project",
+			name: "Create new project",
+			callback: () => {
+				new CreateProjectModal(this.app, (result: CreateProjectProps) => {
+					createProject(this.app, this.settings, result)
+						.then(() => {
+							new Notice(`Project '${result.name}' created!`);
+						})
+						.catch((error) => {
+							if (typeof error == "string") {
+								new Notice(error);
+							}
+							console.log(error);
+						});
+				}).open();
+			},
+		});
+
+		this.addCommand({
+			id: "create-area",
+			name: "Create new area",
+			callback: () => {
+				new CreateAreaModal(this.app, (result: CreateAreaProps) => {
+					createArea(this.app, this.settings, result)
+						.then(() => {
+							new Notice(`Area '${result.name}' created!`);
+						})
+						.catch(() => {});
+				}).open();
+			},
+		});
+
+		this.addCommand({
+			id: "create-resource",
+			name: "Create new resource",
+			callback: () => {
+				new CreateResourceModal(this.app, (result: CreateResourceProps) => {
+					createResource(this.app, this.settings, result)
+						.then(() => {
+							new Notice(`Resource '${result.name}' created!`);
+						})
+						.catch(() => {});
+				}).open();
+			},
+		});
+
+		this.addCommand({
+			id: "move-to-archive",
+			name: "Move to archive",
+			callback: () => {
+				const file = this.app.workspace.getActiveFile();
+				if (file !== null) {
+					archive(this.app, this.settings, file)
+						.then(() => {
+							new Notice(`'${file.basename}' archived`);
+						})
+						.catch((error) => {
+							console.error("[PARA Workflower] An error occurred during archiving:", error.message);
+							new Notice(`FAILED: ${error.message}`);
+						});
+				} else {
+					new Notice("There is nothing to archive");
 				}
 			},
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, "click", (evt: MouseEvent) => {
-			console.log("click", evt);
+		this.addCommand({
+			id: "restore-from-archive",
+			name: "Restore from archive",
+			callback: () => {
+				const file = this.app.workspace.getActiveFile();
+				if (file !== null && this.isArchived(file)) {
+					restore(this.app, this.settings, file)
+						.then(() => {})
+						.catch((error) => {
+							console.log("[PARA Workflower] An error occurred during restoring:", error.message);
+							new Notice(`FAILED: ${error.message}`);
+						});
+				} else {
+					getArchivedParaItems(this.app, this.settings.archivePath).then((items) => {
+						new RestoreParaItemModal(this.app, this, items).open();
+					});
+				}
+			},
 		});
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log("setInterval"), 5 * 60 * 1000));
+		this.addCommand({
+			id: "complete-current-project",
+			name: "Complete project",
+			callback: () => {
+				const file = this.app.workspace.getActiveFile();
+				if (file !== null) {
+					completeProject(this.app, this.settings, file).then(() => {
+						new Notice("Project completed and moved to archive");
+					});
+				}
+			},
+		});
+
+		this.addSettingTab(new SettingTab(this.app, this));
 	}
 
 	onunload() {}
@@ -96,48 +151,50 @@ export default class MyPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
-}
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+	isArchived(file: TFile): boolean {
+		if (file.parent === null) {
+			return false;
+		}
 
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText("Woah!");
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
+		return file.parent.path.contains(this.settings.archivePath);
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
+async function getArchivedParaItems(app: App, archivePath: string) {
+	const items: ArchiveItem[] = [];
+	const archive = app.vault.getFolderByPath(archivePath);
+	if (archive) {
+		await walkArchive(archive, items, app);
 	}
 
-	display(): void {
-		const { containerEl } = this;
+	return items;
+}
 
-		containerEl.empty();
+async function walkArchive(folder: TFolder, items: ArchiveItem[], app: App) {
+	for (const child of folder.children) {
+		if (child instanceof TFolder && !child.name.startsWith("_")) {
+			await walkArchive(child, items, app);
+		}
 
-		new Setting(containerEl)
-			.setName("Setting #1")
-			.setDesc("It's a secret")
-			.addText((text) =>
-				text
-					.setPlaceholder("Enter your secret")
-					.setValue(this.plugin.settings.mySetting)
-					.onChange(async (value) => {
-						this.plugin.settings.mySetting = value;
-						await this.plugin.saveSettings();
-					})
-			);
+		if (child instanceof TFile) {
+			await app.fileManager.processFrontMatter(child, (frontMatter) => {
+				const tags = (frontMatter.tags as Array<string>) || null;
+				if (tags !== null) {
+					const archiveItem: ArchiveItem = { file: child, type: null };
+					if (tags.contains(ParaType.Project)) {
+						archiveItem.type = ParaType.Project;
+					} else if (tags.contains(ParaType.Resource)) {
+						archiveItem.type = ParaType.Resource;
+					} else if (tags.contains(ParaType.Area)) {
+						archiveItem.type = ParaType.Area;
+					}
+
+					if (archiveItem.type !== null) {
+						items.push(archiveItem);
+					}
+				}
+			});
+		}
 	}
 }
